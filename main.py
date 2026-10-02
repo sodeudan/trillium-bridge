@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 
 import requests
+import string
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -35,6 +36,17 @@ class Note(BaseModel):
     folder: str = Field(min_length=1)
     title: str = Field(min_length=1)
     content: str = Field(min_length=1)
+
+def normalize_name(text: str) -> str:
+    remove = string.punctuation + string.whitespace
+
+    return "".join(
+        c for c in text.casefold()
+        if c not in remove
+    )
+
+def string_compare(s1:str, s2: str):
+    return normalize_name(s1) == normalize_name(s2)
 
 
 def trilium_headers():
@@ -177,10 +189,11 @@ def find_project_by_name(project_name: str):
 
     normalized_name = project_name.strip().casefold()
 
+
     matches = [
         project
         for project in get_projects()
-        if project["name"].strip().casefold() == normalized_name
+        if string_compare(project["name"].strip().casefold(), normalized_name) 
     ]
 
     if len(matches) == 1:
@@ -214,7 +227,7 @@ def find_child_by_name(
 
         child = get_trilium_note(child_id)
 
-        if child["title"].strip().casefold() == normalized_name:
+        if string_compare(child["title"].strip().casefold(), normalized_name):
             matches.append(child)
 
     if len(matches) > 1:
