@@ -49,6 +49,38 @@ def string_compare(s1:str, s2: str):
     return normalize_name(s1) == normalize_name(s2)
 
 
+def get_category_obj(category: str):
+        
+    category_obj = find_child_by_name(
+        ROOT_FOLDER_ID,
+        category
+    )
+
+    if not category_obj:
+        raise HTTPException(
+        status_code=404,
+        detail=f"Category '{category}' not found",  
+    )
+        
+
+    return category_obj
+
+def get_folder_objekt(category_id:str, folder:str):
+    folder_obj = find_child_by_name(
+        category_id,
+        folder
+    )
+    
+    if not folder_obj:
+        raise HTTPException(
+        status_code=404,
+        detail=f"folder '{folder}' not found"
+    )
+
+    return folder_obj
+
+
+
 def trilium_headers():
     """
     Return the authorization header required by Trilium ETAPI.
@@ -180,6 +212,25 @@ def get_projects():
         })
 
     return projects
+
+def get_notes(folder_id: str):
+    """
+        Return all direct children beneath folder.
+        Each direct child is treated as a notes.
+    """
+
+    note_parent = get_trilium_note(folder_id)
+    notes = []
+
+    for child_id in note_parent.get("childNoteIds", []):
+        child = get_trilium_note(child_id)
+
+        notes.append({
+            "title": child["title"],
+            "noteId": child["noteId"]
+        })
+
+    return notes
 
 
 def find_project_by_name(project_name: str):
@@ -540,6 +591,17 @@ def trilium_test():
 def list_projects():
     return get_projects()
 
+@app.get("/get-notes")
+def list_notes(
+    category:str,
+    folder: str
+):  
+    category_obj = get_category_obj(category)
+
+    folder_obj = get_folder_objekt(category_obj["noteId"], folder)
+
+    return get_notes(folder_obj["noteId"])
+
 
 @app.post("/write-note")
 def write_note(note: Note):
@@ -613,33 +675,14 @@ def read_note(
     # Root
     #   └── Projekts
     #
-
-    category_obj = find_child_by_name(
-        ROOT_FOLDER_ID,
-        category
-    )
-
-    if not category_obj:
-        raise HTTPException(
-        status_code=404,
-        detail=f"Category '{category}' not found"
-    )
+    category_obj = get_category_obj(category)
 
     #
     # Projekts
     #   └── R7
     #
 
-    folder_obj = find_child_by_name(
-        category_obj["noteId"],
-        folder
-    )
-
-    if not folder_obj:
-        raise HTTPException(
-        status_code=404,
-        detail=f"folder '{folder}' not found"
-    )
+    folder_obj = get_folder_objekt(category_obj["noteId"], folder)
     #
     # R7
     #   └── Uppstartsmöte
@@ -665,4 +708,5 @@ def read_note(
         "title": note_obj["title"],
         "content": content
     }
-    
+
+
