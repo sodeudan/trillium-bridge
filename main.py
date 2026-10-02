@@ -591,13 +591,72 @@ def list_notes(
 
     return get_children(folder_obj["noteId"])
 
-# @app.get("/tree")
-# def list_tree_structure():
-#     tree = []
+@app.get("/tree")
+def list_tree_structure():
+    tree = {}
 
-#     project_obj = get_children(ROOT_FOLDER_ID)
+    categories = get_children(ROOT_FOLDER_ID)
 
-#     tree.append
+    for category in categories:
+
+        tree[category["title"]] = {}
+
+        folders = get_children(category["noteId"])
+
+        for folder in folders:
+
+            notes = get_children(folder["noteId"])
+
+            tree[category["title"]][folder["title"]] =[
+                note["title"]
+                for note in notes
+            ]
+
+    return tree
+
+@app.get("/read-note")
+def read_note(
+    category: str,
+    folder: str,
+    title: str
+): 
+        #
+    # Root
+    #   └── Projekts
+    #
+    category_obj = get_category_obj(category)
+
+    #
+    # Projekts
+    #   └── R7
+    #
+
+    folder_obj = get_folder_objekt(category_obj["noteId"], folder)
+    #
+    # R7
+    #   └── Uppstartsmöte
+    #
+
+    note_obj = find_child_by_name(
+        folder_obj["noteId"],
+        title
+    )
+
+    if not note_obj:
+        raise HTTPException(
+        status_code=404,
+        detail=f"Note '{title}' not found"
+    )
+
+    content = get_note_content(note_obj["noteId"])
+
+    return {
+        "action": "read",
+        "category": category_obj["title"],
+        "folder": folder_obj["title"],
+        "title": note_obj["title"],
+        "content": content
+    }
 
 
 @app.post("/write-note")
@@ -662,48 +721,5 @@ def write_note(note: Note):
         "noteId": created["noteId"]
     }
 
-@app.get("/read-note")
-def read_note(
-    category: str,
-    folder: str,
-    title: str
-): 
-        #
-    # Root
-    #   └── Projekts
-    #
-    category_obj = get_category_obj(category)
-
-    #
-    # Projekts
-    #   └── R7
-    #
-
-    folder_obj = get_folder_objekt(category_obj["noteId"], folder)
-    #
-    # R7
-    #   └── Uppstartsmöte
-    #
-
-    note_obj = find_child_by_name(
-        folder_obj["noteId"],
-        title
-    )
-
-    if not note_obj:
-        raise HTTPException(
-        status_code=404,
-        detail=f"Note '{title}' not found"
-    )
-
-    content = get_note_content(note_obj["noteId"])
-
-    return {
-        "action": "read",
-        "category": category_obj["title"],
-        "folder": folder_obj["title"],
-        "title": note_obj["title"],
-        "content": content
-    }
 
 
