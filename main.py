@@ -175,7 +175,7 @@ def get_projects():
         child = get_trilium_note(child_id)
 
         projects.append({
-            "name": child["title"],
+            "title": child["title"],
             "noteId": child["noteId"]
         })
 
@@ -193,7 +193,7 @@ def find_project_by_name(project_name: str):
     matches = [
         project
         for project in get_projects()
-        if string_compare(project["name"].strip().casefold(), normalized_name) 
+        if string_compare(project["title"].strip().casefold(), normalized_name) 
     ]
 
     if len(matches) == 1:
@@ -272,7 +272,7 @@ def create_child_folder(
     created = response.json()["note"]
 
     return {
-        "name": created["title"],
+        "title": created["title"],
         "noteId": created["noteId"],
         "created": True
     }
@@ -288,7 +288,7 @@ def find_or_create_child_folder(
 
     if existing:
         return {
-            "name": existing["title"],
+            "title": existing["title"],
             "noteId": existing["noteId"],
             "created": False
         }
@@ -347,7 +347,7 @@ def create_project(project_name: str):
     result = response.json()
 
     return {
-        "name": result["note"]["title"],
+        "title": result["note"]["title"],
         "noteId": result["note"]["noteId"],
         "created": True
     }
@@ -437,7 +437,7 @@ def create_trilium_note(note: Note, project: dict):
             status_code=502,
             detail={
                 "message": "Trilium could not create the note",
-                "project": project["name"],
+                "project": project["title"],
                 "triliumStatus": response.status_code,
                 "triliumResponse": response.text
             }
@@ -447,7 +447,7 @@ def create_trilium_note(note: Note, project: dict):
 
     return {
         "action": "created",
-        "project": project["name"],
+        "project": project["title"],
         "projectCreated": project.get("created", False),
         "projectNoteId": project["noteId"],
         "title": result["note"]["title"],
@@ -597,8 +597,72 @@ def write_note(note: Note):
 
     return {
         "action": "created",
-        "category": category["name"],
-        "folder": folder["name"],
+        "category": category["title"],
+        "folder": folder["title"],
         "title": created["title"],
         "noteId": created["noteId"]
     }
+
+@app.get("/read-note")
+def read_note(
+    category: str,
+    folder: str,
+    title: str
+): 
+        #
+    # Root
+    #   └── Projekts
+    #
+
+    category_obj = find_child_by_name(
+        ROOT_FOLDER_ID,
+        category
+    )
+
+    if not category_obj:
+        raise HTTPException(
+        status_code=404,
+        detail=f"Category '{category}' not found"
+    )
+
+    #
+    # Projekts
+    #   └── R7
+    #
+
+    folder_obj = find_child_by_name(
+        category_obj["noteId"],
+        folder
+    )
+
+    if not folder_obj:
+        raise HTTPException(
+        status_code=404,
+        detail=f"folder '{folder}' not found"
+    )
+    #
+    # R7
+    #   └── Uppstartsmöte
+    #
+
+    note_obj = find_child_by_name(
+        folder_obj["noteId"],
+        title
+    )
+
+    if not note_obj:
+        raise HTTPException(
+        status_code=404,
+        detail=f"Note '{title}' not found"
+    )
+
+    content = get_note_content(note_obj["noteId"])
+
+    return {
+        "action": "read",
+        "category": category_obj["title"],
+        "folder": folder_obj["title"],
+        "title": note_obj["title"],
+        "content": content
+    }
+    
