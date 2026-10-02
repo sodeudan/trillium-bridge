@@ -213,6 +213,20 @@ def get_projects():
 
     return projects
 
+def get_folders(category_id: str):
+
+    folder_parent = get_trilium_note(category_id)
+    folders = []
+
+    for child_id in folder_parent.get("childNoteIds", []):
+        child = get_trilium_note(child_id)
+
+        folders.append({
+            "title": child["title"],
+            "noteId": child["noteId"]
+        })
+    return folders
+
 def get_notes(folder_id: str):
     """
         Return all direct children beneath folder.
@@ -590,6 +604,14 @@ def trilium_test():
 @app.get("/projects")
 def list_projects():
     return get_projects()
+
+@app.get("/get-folders")
+def list_folders(category: str):
+
+    category_obj = get_category_obj(category)
+
+    return get_folders(category_obj["noteId"])
+
 
 @app.get("/get-notes")
 def list_notes(
