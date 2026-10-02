@@ -536,6 +536,27 @@ def append_to_trilium_note(note: Note, existing_note: dict):
         "noteId": note_id
     }
 
+def build_tree():
+    tree = {}
+
+    categories = get_children(ROOT_FOLDER_ID)
+
+    for category in categories:
+
+        tree[category["title"]] = {}
+
+        folders = get_children(category["noteId"])
+
+        for folder in folders:
+
+            notes = get_children(folder["noteId"])
+
+            tree[category["title"]][folder["title"]] =[
+                note["title"]
+                for note in notes
+            ]
+
+    return tree
 
 @app.get("/")
 def root():
@@ -593,26 +614,7 @@ def list_notes(
 
 @app.get("/tree")
 def list_tree_structure():
-    tree = {}
-
-    categories = get_children(ROOT_FOLDER_ID)
-
-    for category in categories:
-
-        tree[category["title"]] = {}
-
-        folders = get_children(category["noteId"])
-
-        for folder in folders:
-
-            notes = get_children(folder["noteId"])
-
-            tree[category["title"]][folder["title"]] =[
-                note["title"]
-                for note in notes
-            ]
-
-    return tree
+    return build_tree()
 
 @app.get("/read-note")
 def read_note(
@@ -656,6 +658,38 @@ def read_note(
         "folder": folder_obj["title"],
         "title": note_obj["title"],
         "content": content
+    }
+
+@app.get("/search")
+def search(search_term: str):
+
+    matches = []
+
+    normalize_search = normalize_name(search_term)
+
+    tree = build_tree()
+
+    for category_name, folders in tree.items():
+
+      for folder_name, notes in folders.items(): 
+
+          for note_title in notes:
+              searchable_text = " ".join([
+                  category_name,
+                  folder_name,
+                  note_title
+              ])
+
+              if(normalize_search in normalize_name(searchable_text)):
+                  matches.append({
+                      "category": category_name,
+                      "folder": folder_name,
+                      "title": note_title
+                  })
+    return{
+        "searchTerm": search_term,
+        "matches": matches,
+        "count": len(matches)
     }
 
 
