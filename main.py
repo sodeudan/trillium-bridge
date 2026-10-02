@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from enum import Enum
+from html.parser import HTMLParser
 
 
 # Load variables from .env
@@ -36,6 +37,28 @@ class Note(BaseModel):
     folder: str = Field(min_length=1)
     title: str = Field(min_length=1)
     content: str = Field(min_length=1)
+
+class HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+    def get_text(self):
+        return " ".join(self.parts)
+
+
+def html_to_text(html_content: str) -> str:
+    """
+    Convert Trilium HTML content into searchable plain text.
+    """
+
+    parser = HTMLTextExtractor()
+    parser.feed(html_content)
+
+    return parser.get_text().strip()
 
 def normalize_name(text: str) -> str:
     remove = string.punctuation + string.whitespace
@@ -537,26 +560,96 @@ def append_to_trilium_note(note: Note, existing_note: dict):
     }
 
 def build_tree():
+    """
+    Build the hierarchy:
+
+    Root
+      -> Category
+        -> Folder
+          -> Notes
+
+    Note IDs are preserved so other functions do not need
+    to search Trilium again to resolve each note.
+    """
+
     tree = {}
 
-    categories = get_children(ROOT_FOLDER_ID)
+    categories = get_children(
+        ROOT_FOLDER_ID
+    )
 
     for category in categories:
+        category_title = category["title"]
 
-        tree[category["title"]] = {}
+        tree[category_title] = {
+            "noteId": category["noteId"],
+            "folders": {}
+        }
 
-        folders = get_children(category["noteId"])
+        folders = get_children(
+            category["noteId"]
+        )
 
         for folder in folders:
+            folder_title = folder["title"]
 
-            notes = get_children(folder["noteId"])
+            notes = get_children(
+                folder["noteId"]
+            )
 
-            tree[category["title"]][folder["title"]] =[
-                note["title"]
-                for note in notes
-            ]
+            tree[category_title]["folders"][folder_title] = {
+                "noteId": folder["noteId"],
+                "notes": [
+                    {
+                        "title": note["title"],
+                        "noteId": note["noteId"]
+                    }
+                    for note in notes
+                ]
+            }
 
     return tree
+
+def create_search_snippet(
+    text: str,
+    search_term: str,
+    surrounding_characters: int = 100
+) -> str:
+    """
+    Return text surrounding the search match.
+    """
+
+    normalized_text = text.casefold()
+    normalized_term = search_term.strip().casefold()
+
+    match_position = normalized_text.find(
+        normalized_term
+    )
+
+    if match_position == -1:
+        return text[: surrounding_characters * 2].strip()
+
+    start = max(
+        0,
+        match_position - surrounding_characters
+    )
+
+    end = min(
+        len(text),
+        match_position
+        + len(search_term)
+        + surrounding_characters
+    )
+
+    snippet = text[start:end].strip()
+
+    if start > 0:
+        snippet = f"...{snippet}"
+
+    if end < len(text):
+        snippet = f"{snippet}..."
+
+    return snippet
 
 @app.get("/")
 def root():
@@ -661,35 +754,122 @@ def read_note(
     }
 
 @app.get("/search")
-def search(search_term: str):
+def search_notes(
+    search_term: str,
+    include_content: bool = True
+):
+    """
+    Search category names, folder names, note titles,
+    and optionally note content.
 
-    matches = []
+    Examples:
 
-    normalize_search = normalize_name(search_term)
+    /search?search_term=R7
+
+    /search?search_term=Jenny
+
+    /search?search_term=Sprint&include_content=false
+    """
+
+    clean_search_term = search_term.strip()
+
+    if not clean_search_term:
+        raise HTTPException(
+            status_code=400,
+            detail="search_term cannot be empty"
+        )
+
+    normalized_search = normalize_name(
+        clean_search_term
+    )
 
     tree = build_tree()
+    matches = []
 
-    for category_name, folders in tree.items():
+    for category_title, category_data in tree.items():
 
-      for folder_name, notes in folders.items(): 
+        folders = category_data["folders"]
 
-          for note_title in notes:
-              searchable_text = " ".join([
-                  category_name,
-                  folder_name,
-                  note_title
-              ])
+        for folder_title, folder_data in folders.items():
 
-              if(normalize_search in normalize_name(searchable_text)):
-                  matches.append({
-                      "category": category_name,
-                      "folder": folder_name,
-                      "title": note_title
-                  })
-    return{
-        "searchTerm": search_term,
-        "matches": matches,
-        "count": len(matches)
+            notes = folder_data["notes"]
+
+            for note in notes:
+                note_title = note["title"]
+                note_id = note["noteId"]
+
+                title_path_text = " ".join([
+                    category_title,
+                    folder_title,
+                    note_title
+                ])
+
+                path_matches = (
+                    normalized_search
+                    in normalize_name(title_path_text)
+                )
+
+                content = ""
+                plain_content = ""
+                content_matches = False
+
+                if include_content:
+                    content = get_note_content(note_id)
+                    plain_content = html_to_text(content)
+
+                    content_matches = (
+                        normalized_search
+                        in normalize_name(plain_content)
+                    )
+
+                if path_matches or content_matches:
+
+                    match_locations = []
+
+                    if (
+                        normalized_search
+                        in normalize_name(category_title)
+                    ):
+                        match_locations.append("category")
+
+                    if (
+                        normalized_search
+                        in normalize_name(folder_title)
+                    ):
+                        match_locations.append("folder")
+
+                    if (
+                        normalized_search
+                        in normalize_name(note_title)
+                    ):
+                        match_locations.append("title")
+
+                    if content_matches:
+                        match_locations.append("content")
+
+                    result = {
+                        "category": category_title,
+                        "categoryNoteId": category_data["noteId"],
+                        "folder": folder_title,
+                        "folderNoteId": folder_data["noteId"],
+                        "title": note_title,
+                        "noteId": note_id,
+                        "matchedIn": match_locations
+                    }
+
+                    if content_matches:
+                        result["snippet"] = create_search_snippet(
+                            plain_content,
+                            clean_search_term
+                        )
+
+                    matches.append(result)
+
+    return {
+        "searchTerm": clean_search_term,
+        "includeContent": include_content,
+        "count": len(matches),
+        "matches": matches
     }
 
 
