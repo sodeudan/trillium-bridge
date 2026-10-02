@@ -872,6 +872,29 @@ def search_notes(
         "matches": matches
     }
 
+@app.get("/statistics")
+def statistics():
+    tree = build_tree()
+
+    catgories = 0
+    folders = 0
+    notes = 0
+
+    for category_name,category_data in tree.items(): 
+        catgories += 1
+
+        for folder_name, folder_data in category_data["folders"].items():
+            folders += 1
+
+            notes += len(folder_data["notes"])
+
+    return {
+        "categories": catgories,
+        "folders": folders,
+        "notes": notes
+    }
+    
+        
 
 @app.post("/write-note")
 def write_note(note: Note):
