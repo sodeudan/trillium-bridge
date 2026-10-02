@@ -194,57 +194,24 @@ def get_note_content(note_id: str):
     return response.text
 
 
-def get_projects():
+def get_children(parent_note_id: str):
     """
     Return all direct children beneath PROJECT_PARENT_ID.
     Each direct child is treated as a project.
     """
 
-    project_parent = get_trilium_note(ROOT_FOLDER_ID)
-    projects = []
+    parent = get_trilium_note(parent_note_id)
+    children = []
 
-    for child_id in project_parent.get("childNoteIds", []):
+    for child_id in parent.get("childNoteIds", []):
         child = get_trilium_note(child_id)
 
-        projects.append({
+        children.append({
             "title": child["title"],
             "noteId": child["noteId"]
         })
 
-    return projects
-
-def get_folders(category_id: str):
-
-    folder_parent = get_trilium_note(category_id)
-    folders = []
-
-    for child_id in folder_parent.get("childNoteIds", []):
-        child = get_trilium_note(child_id)
-
-        folders.append({
-            "title": child["title"],
-            "noteId": child["noteId"]
-        })
-    return folders
-
-def get_notes(folder_id: str):
-    """
-        Return all direct children beneath folder.
-        Each direct child is treated as a notes.
-    """
-
-    note_parent = get_trilium_note(folder_id)
-    notes = []
-
-    for child_id in note_parent.get("childNoteIds", []):
-        child = get_trilium_note(child_id)
-
-        notes.append({
-            "title": child["title"],
-            "noteId": child["noteId"]
-        })
-
-    return notes
+    return children
 
 
 def find_project_by_name(project_name: str):
@@ -257,7 +224,7 @@ def find_project_by_name(project_name: str):
 
     matches = [
         project
-        for project in get_projects()
+        for project in get_children(ROOT_FOLDER_ID)
         if string_compare(project["title"].strip().casefold(), normalized_name) 
     ]
 
@@ -603,14 +570,14 @@ def trilium_test():
 
 @app.get("/projects")
 def list_projects():
-    return get_projects()
+    return get_children(ROOT_FOLDER_ID)
 
 @app.get("/get-folders")
 def list_folders(category: str):
 
     category_obj = get_category_obj(category)
 
-    return get_folders(category_obj["noteId"])
+    return get_children(category_obj["noteId"])
 
 
 @app.get("/get-notes")
@@ -622,7 +589,15 @@ def list_notes(
 
     folder_obj = get_folder_objekt(category_obj["noteId"], folder)
 
-    return get_notes(folder_obj["noteId"])
+    return get_children(folder_obj["noteId"])
+
+# @app.get("/tree")
+# def list_tree_structure():
+#     tree = []
+
+#     project_obj = get_children(ROOT_FOLDER_ID)
+
+#     tree.append
 
 
 @app.post("/write-note")
