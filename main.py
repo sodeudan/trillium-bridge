@@ -899,6 +899,32 @@ def create_search_snippet(
 
     return snippet
 
+def count_tree(nodes):
+
+    folders = 0
+    notes = 0
+
+    for node in nodes:
+
+        folders += 1
+
+        child_folders, child_notes = count_tree(
+            node["children"]
+        )
+
+        folders += child_folders
+        notes += child_notes
+
+        #
+        # A note has no children
+        #
+
+        if len(node["children"]) == 0:
+            notes += 1
+
+    return folders, notes
+
+
 @app.get("/")
 def root():
     return {
@@ -1036,29 +1062,24 @@ def search_notes(
         "matches": matches
     }
 
-@app.get("/statistics",
-         summary = "Get the current number of categories, folders and notes" )
+@app.get(
+    "/statistics",
+    summary="Get the current statistics"
+)
 def statistics():
-    tree = build_tree_node()
 
-    catgories = 0
-    folders = 0
-    notes = 0
+    tree = build_tree_node(
+        ROOT_FOLDER_ID
+    )
 
-    for category_name,category_data in tree.items(): 
-        catgories += 1
-
-        for folder_name, folder_data in category_data["folders"].items():
-            folders += 1
-
-            notes += len(folder_data["notes"])
+    folders, notes = count_tree(
+        tree
+    )
 
     return {
-        "categories": catgories,
-        "folders": folders,
-        "notes": notes
+        "nodes": folders,
+        "leafNotes": notes
     }
-    
         
 
 @app.post(
