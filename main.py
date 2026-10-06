@@ -85,39 +85,6 @@ def normalize_name(text: str) -> str:
 def string_compare(s1:str, s2: str):
     return normalize_name(s1) == normalize_name(s2)
 
-
-def get_category_obj(category: str):
-        
-    category_obj = find_child_by_name(
-        ROOT_FOLDER_ID,
-        category
-    )
-
-    if not category_obj:
-        raise HTTPException(
-        status_code=404,
-        detail=f"Category '{category}' not found",  
-    )
-        
-
-    return category_obj
-
-def get_folder_objekt(category_id:str, folder:str):
-    folder_obj = find_child_by_name(
-        category_id,
-        folder
-    )
-    
-    if not folder_obj:
-        raise HTTPException(
-        status_code=404,
-        detail=f"folder '{folder}' not found"
-    )
-
-    return folder_obj
-
-
-
 def trilium_headers():
     """
     Return the authorization header required by Trilium ETAPI.
@@ -607,49 +574,6 @@ def find_or_create_project(project_name: str):
     return create_project(project_name)
 
 
-def find_note_by_title(project_name: str, note_title: str):
-    """
-    Find a direct child note inside a project using a
-    case-insensitive exact title match.
-    """
-
-    project = find_project_by_name(project_name)
-
-    if not project:
-        return None
-
-    project_note = get_trilium_note(project["noteId"])
-    normalized_title = note_title.strip().casefold()
-    matches = []
-
-    for child_id in project_note.get("childNoteIds", []):
-        child = get_trilium_note(child_id)
-
-        if child["title"].strip().casefold() == normalized_title:
-            matches.append(child)
-
-    if len(matches) > 1:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": (
-                    f"More than one note named '{note_title.strip()}' "
-                    f"exists in project '{project_name.strip()}'"
-                ),
-                "matches": [
-                    {
-                        "title": match["title"],
-                        "noteId": match["noteId"]
-                    }
-                    for match in matches
-                ]
-            }
-        )
-
-    if len(matches) == 1:
-        return matches[0]
-
-    return None
 
 def create_trilium_note(
     request: WriteNoteRequest,
@@ -956,32 +880,6 @@ def trilium_test():
         "trilium": response.json()
     }
 
-
-@app.get("/projects",
-         summary = "Lists all categories and with title and noteId")
-def list_projects():
-    return get_children(ROOT_FOLDER_ID)
-
-@app.get("/get-folders",
-         summary = "Lists all folders and with title and noteId")
-def list_folders(category: str):
-
-    category_obj = get_category_obj(category)
-
-    return get_children(category_obj["noteId"])
-
-
-@app.get("/get-notes")
-def list_notes(
-    category:str,
-    folder: str
-):  
-    category_obj = get_category_obj(category)
-
-    folder_obj = get_folder_objekt(category_obj["noteId"], folder)
-
-    return get_children(folder_obj["noteId"])
-
 @app.get("/tree")
 def list_tree_structure():
     return {
@@ -989,50 +887,6 @@ def list_tree_structure():
         "noteId": ROOT_FOLDER_ID,
         "children": build_tree_node(
             ROOT_FOLDER_ID
-        )
-    }
-
-
-@app.post(
-    "/read-note",
-    summary="Read a note using its complete path"
-)
-def read_note(request: NotePath):
-    clean_path = [
-        part.strip()
-        for part in request.path
-        if part.strip()
-    ]
-
-    if not clean_path:
-        raise HTTPException(
-            status_code=400,
-            detail="The path must contain a note title"
-        )
-
-    note = find_path(
-        clean_path
-    )
-
-    if not note:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "message": "Note path was not found",
-                "path": clean_path
-            }
-        )
-
-    return {
-        "action": "read",
-        "path": [
-            item["title"]
-            for item in note["resolvedPath"]
-        ],
-        "title": note["title"],
-        "noteId": note["noteId"],
-        "content": get_note_content(
-            note["noteId"]
         )
     }
 
@@ -1080,7 +934,51 @@ def statistics():
         "nodes": folders,
         "leafNotes": notes
     }
-        
+
+
+@app.post(
+    "/read-note",
+    summary="Read a note using its complete path"
+)
+def read_note(request: NotePath):
+    clean_path = [
+        part.strip()
+        for part in request.path
+        if part.strip()
+    ]
+
+    if not clean_path:
+        raise HTTPException(
+            status_code=400,
+            detail="The path must contain a note title"
+        )
+
+    note = find_path(
+        clean_path
+    )
+
+    if not note:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Note path was not found",
+                "path": clean_path
+            }
+        )
+
+    return {
+        "action": "read",
+        "path": [
+            item["title"]
+            for item in note["resolvedPath"]
+        ],
+        "title": note["title"],
+        "noteId": note["noteId"],
+        "content": get_note_content(
+            note["noteId"]
+        )
+    }
+
 
 @app.post(
     "/write-note",
