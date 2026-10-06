@@ -5,7 +5,7 @@ from datetime import datetime
 import requests
 import string
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from enum import Enum
 from html.parser import HTMLParser
@@ -18,7 +18,10 @@ load_dotenv()
 app = FastAPI(
     title="Trilium Copilot Bridge",
     description="Creates and updates Trilium notes by project name.",
-    version="0.2.0"
+    version="0.2.0",
+    # servers=[{
+    #     "url": "https://specific-liverpool-isle-identifier.trycloudflare.com/"
+    # }]
 )
 
 
@@ -28,15 +31,26 @@ ROOT_FOLDER_ID = "root"
 
 REQUEST_TIMEOUT = 10
 
-class WorkspaceType(str, Enum):
-    project = "project"
-    work_area = "workArea"
 
-class Note(BaseModel):
-    category: str = Field(min_length=1)
-    folder: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    content: str = Field(min_length=1)
+class NotePath(BaseModel):
+    path: list[str] = Field(
+        min_length=1,
+        description=(
+            "Complete path from root to the target note. "
+            "The last element is the note title. "
+            "Example: ['Projekts', 'R7', 'Förarbete', "
+            "'Uppdragsbeskrivning']"
+        )
+    )
+
+
+class WriteNoteRequest(NotePath):
+    content: str = Field(
+        min_length=1,
+        description="Content to create or append to the note"
+    )
+
+
 
 class HTMLTextExtractor(HTMLParser):
     def __init__(self):
@@ -217,10 +231,9 @@ def get_note_content(note_id: str):
     return response.text
 
 
-def get_children(parent_note_id: str):
+def get_children(parent_note_id: str) -> list:
     """
-    Return all direct children beneath PROJECT_PARENT_ID.
-    Each direct child is treated as a project.
+    Return the direct children of any Trilium note.
     """
 
     parent = get_trilium_note(parent_note_id)
@@ -231,7 +244,9 @@ def get_children(parent_note_id: str):
 
         children.append({
             "title": child["title"],
-            "noteId": child["noteId"]
+            "noteId": child["noteId"],
+            "type": child.get("type"),
+            "mime": child.get("mime")
         })
 
     return children
@@ -271,27 +286,30 @@ def find_project_by_name(project_name: str):
 def find_child_by_name(
     parent_note_id: str,
     child_name: str
-):
-    parent = get_trilium_note(parent_note_id)
+) -> dict | None:
+    """
+    Find a direct child beneath a parent.
 
-    normalized_name = child_name.strip().casefold()
+    Uses normalize_name(), so R7, R 7 and r-7 match.
+    """
 
-    matches = []
+    normalized_target = normalize_name(child_name)
 
-    for child_id in parent.get("childNoteIds", []):
-
-        child = get_trilium_note(child_id)
-
-        if string_compare(child["title"].strip().casefold(), normalized_name):
-            matches.append(child)
+    matches = [
+        child
+        for child in get_children(parent_note_id)
+        if normalize_name(child["title"]) == normalized_target
+    ]
 
     if len(matches) > 1:
         raise HTTPException(
             status_code=409,
             detail={
-                "message":
-                    f"More than one child named "
-                    f"'{child_name}' exists"
+                "message": (
+                    f"More than one child matches "
+                    f"'{child_name}' under '{parent_note_id}'"
+                ),
+                "matches": matches
             }
         )
 
@@ -299,6 +317,171 @@ def find_child_by_name(
         return matches[0]
 
     return None
+
+
+def create_child_container(
+    parent_note_id: str,
+    title: str
+) -> dict:
+    """
+    Create a new container beneath any parent.
+    """
+
+    clean_title = title.strip()
+
+    if not clean_title:
+        raise HTTPException(
+            status_code=400,
+            detail="A path component cannot be empty"
+        )
+
+    payload = {
+        "parentNoteId": parent_note_id,
+        "title": clean_title,
+        "type": "text",
+        "content": "",
+        "isExpanded": True
+    }
+
+    response = request_trilium(
+        "POST",
+        "/etapi/create-note",
+        json=payload
+    )
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Trilium could not create the container",
+                "parentNoteId": parent_note_id,
+                "title": clean_title,
+                "triliumStatus": response.status_code,
+                "triliumResponse": response.text
+            }
+        )
+
+    created = response.json()["note"]
+
+    return {
+        "title": created["title"],
+        "noteId": created["noteId"],
+        "created": True
+    }
+
+def find_or_create_path(
+    path: list[str]
+) -> dict:
+    """
+    Walk from root through every path component.
+
+    Existing containers are reused. Missing containers are created.
+    Returns the final path node.
+    """
+
+    if not path:
+        raise HTTPException(
+            status_code=400,
+            detail="The path must contain at least one item"
+        )
+
+    current_parent_id = ROOT_FOLDER_ID
+    resolved_path = []
+    anything_created = False
+
+    for path_component in path:
+        clean_component = path_component.strip()
+
+        if not clean_component:
+            raise HTTPException(
+                status_code=400,
+                detail="Path components cannot be empty"
+            )
+
+        child = find_child_by_name(
+            current_parent_id,
+            clean_component
+        )
+
+        if child:
+            resolved = {
+                **child,
+                "created": False
+            }
+        else:
+            resolved = create_child_container(
+                current_parent_id,
+                clean_component
+            )
+
+            anything_created = True
+
+        resolved_path.append({
+            "title": resolved["title"],
+            "noteId": resolved["noteId"],
+            "created": resolved["created"]
+        })
+
+        current_parent_id = resolved["noteId"]
+
+    return {
+        "title":(
+            resolved_path[-1]["title"]
+            if resolved_path
+            else "root"
+            ),
+        "noteId": resolved_path[-1]["noteId"],
+        "created": anything_created,
+        "resolvedPath": resolved_path
+    }
+
+def find_path(path: list[str]) -> dict | None:
+    """
+    Traverse an existing path starting at root.
+
+    Nothing is created when a path element is missing.
+    """
+
+    if not path:
+        return {
+            "title": "root",
+            "noteId": ROOT_FOLDER_ID,
+            "resolvedPath": []
+        }
+
+    current_parent_id = ROOT_FOLDER_ID
+    resolved_path = []
+
+    for path_part in path:
+        clean_part = path_part.strip()
+
+        if not clean_part:
+            raise HTTPException(
+                status_code=400,
+                detail="Path elements cannot be empty"
+            )
+
+        child = find_child_by_name(
+            current_parent_id,
+            clean_part
+        )
+
+        if not child:
+            return None
+
+        resolved_path.append({
+            "title": child["title"],
+            "noteId": child["noteId"]
+        })
+
+        current_parent_id = child["noteId"]
+
+    return {
+        "title": resolved_path[-1]["title"],
+        "noteId": resolved_path[-1]["noteId"],
+        "resolvedPath": resolved_path
+    }
+
 
 def create_child_folder(
     parent_note_id: str,
@@ -468,17 +651,18 @@ def find_note_by_title(project_name: str, note_title: str):
 
     return None
 
-
-def create_trilium_note(note: Note, project: dict):
-    """
-    Create a new note beneath the supplied project.
-    """
-
+def create_trilium_note(
+    request: WriteNoteRequest,
+    parent: dict,
+    note_title: str
+) -> dict:
     payload = {
-        "parentNoteId": project["noteId"],
-        "title": note.title.strip(),
+        "parentNoteId": parent["noteId"],
+        "title": note_title,
         "type": "text",
-        "content": f"<p>{html.escape(note.content)}</p>"
+        "content": (
+            f"<p>{html.escape(request.content)}</p>"
+        )
     }
 
     response = request_trilium(
@@ -492,29 +676,31 @@ def create_trilium_note(note: Note, project: dict):
             status_code=502,
             detail={
                 "message": "Trilium could not create the note",
-                "project": project["title"],
+                "path": request.path,
                 "triliumStatus": response.status_code,
                 "triliumResponse": response.text
             }
         )
 
-    result = response.json()
+    created = response.json()["note"]
 
     return {
         "action": "created",
-        "project": project["title"],
-        "projectCreated": project.get("created", False),
-        "projectNoteId": project["noteId"],
-        "title": result["note"]["title"],
-        "noteId": result["note"]["noteId"]
+        "path": [
+            item["title"]
+            for item in parent["resolvedPath"]
+        ] + [created["title"]],
+        "parentPathCreated": parent["created"],
+        "title": created["title"],
+        "noteId": created["noteId"]
     }
 
 
-def append_to_trilium_note(note: Note, existing_note: dict):
-    """
-    Append new HTML content to an existing Trilium note.
-    """
-
+def append_to_trilium_note(
+    request: WriteNoteRequest,
+    existing_note: dict,
+    resolved_path: list[str]
+) -> dict:
     note_id = existing_note["noteId"]
     current_content = get_note_content(note_id)
 
@@ -524,12 +710,12 @@ def append_to_trilium_note(note: Note, existing_note: dict):
 
     new_section = (
         "<hr>"
-        f"<p><strong>Update {html.escape(timestamp)}</strong></p>"
-        f"<p>{html.escape(note.content)}</p>"
+        f"<p><strong>Update "
+        f"{html.escape(timestamp)}</strong></p>"
+        f"<p>{html.escape(request.content)}</p>"
     )
 
     updated_content = current_content + new_section
-    content_bytes = updated_content.encode("utf-8")
 
     response = request_trilium(
         "PUT",
@@ -537,7 +723,7 @@ def append_to_trilium_note(note: Note, existing_note: dict):
         headers={
             "Content-Type": "application/octet-stream"
         },
-        data=content_bytes
+        data=updated_content.encode("utf-8")
     )
 
     if not response.ok:
@@ -553,62 +739,124 @@ def append_to_trilium_note(note: Note, existing_note: dict):
 
     return {
         "action": "updated",
-        "category": note.category.strip(),
-        "folder": note.folder.strip(),
+        "path": resolved_path,
         "title": existing_note["title"],
-        "noteId": note_id
+        "noteId": note_id,
+        "appendedCharacters": len(request.content)
     }
 
-def build_tree():
+def build_tree_node(
+    parent_note_id: str,
+    visited: set[str] | None = None
+) -> list:
     """
-    Build the hierarchy:
+    Recursively build every descendant below a parent.
 
-    Root
-      -> Category
-        -> Folder
-          -> Notes
-
-    Note IDs are preserved so other functions do not need
-    to search Trilium again to resolve each note.
+    A path-local visited set prevents cycles if a Trilium note
+    is branched into one of its own descendant paths.
     """
 
-    tree = {}
+    if visited is None:
+        visited = set()
 
-    categories = get_children(
-        ROOT_FOLDER_ID
-    )
+    if parent_note_id in visited:
+        return [{
+            "title": "[Cycle detected]",
+            "noteId": parent_note_id,
+            "children": []
+        }]
 
-    for category in categories:
-        category_title = category["title"]
+    current_visited = visited | {parent_note_id}
+    result = []
 
-        tree[category_title] = {
-            "noteId": category["noteId"],
-            "folders": {}
-        }
+    for child in get_children(parent_note_id):
+        result.append({
+            "title": child["title"],
+            "noteId": child["noteId"],
+            "children": build_tree_node(
+                child["noteId"],
+                current_visited
+            )
+        })
 
-        folders = get_children(
-            category["noteId"]
+    return result
+
+def search_tree_recursive(
+    parent_note_id: str,
+    search_term: str,
+    current_path: list[str] | None = None,
+    include_content: bool = True,
+    visited: set[str] | None = None
+) -> list[dict]:
+    if current_path is None:
+        current_path = []
+
+    if visited is None:
+        visited = set()
+
+    if parent_note_id in visited:
+        return []
+
+    current_visited = visited | {parent_note_id}
+    normalized_search = normalize_name(search_term)
+    matches = []
+
+    for child in get_children(parent_note_id):
+        child_path = current_path + [child["title"]]
+
+        title_matches = (
+            normalized_search
+            in normalize_name(child["title"])
         )
 
-        for folder in folders:
-            folder_title = folder["title"]
+        plain_content = ""
+        content_matches = False
 
-            notes = get_children(
-                folder["noteId"]
+        if include_content:
+            raw_content = get_note_content(
+                child["noteId"]
             )
 
-            tree[category_title]["folders"][folder_title] = {
-                "noteId": folder["noteId"],
-                "notes": [
-                    {
-                        "title": note["title"],
-                        "noteId": note["noteId"]
-                    }
-                    for note in notes
-                ]
+            plain_content = html_to_text(
+                raw_content
+            )
+
+            content_matches = (
+                normalized_search
+                in normalize_name(plain_content)
+            )
+
+        if title_matches or content_matches:
+            match = {
+                "path": child_path,
+                "title": child["title"],
+                "noteId": child["noteId"],
+                "matchedIn": []
             }
 
-    return tree
+            if title_matches:
+                match["matchedIn"].append("title")
+
+            if content_matches:
+                match["matchedIn"].append("content")
+                match["snippet"] = create_search_snippet(
+                    plain_content,
+                    search_term
+                )
+
+            matches.append(match)
+
+        matches.extend(
+            search_tree_recursive(
+                parent_note_id=child["noteId"],
+                search_term=search_term,
+                current_path=child_path,
+                include_content=include_content,
+                visited=current_visited
+            )
+        )
+
+    return matches
 
 def create_search_snippet(
     text: str,
@@ -659,7 +907,8 @@ def root():
     }
 
 
-@app.get("/trilium-test")
+@app.get("/trilium-test",
+         summary = "tests the Trilium connection, returns app info")
 def trilium_test():
     response = request_trilium(
         "GET",
@@ -682,11 +931,13 @@ def trilium_test():
     }
 
 
-@app.get("/projects")
+@app.get("/projects",
+         summary = "Lists all categories and with title and noteId")
 def list_projects():
     return get_children(ROOT_FOLDER_ID)
 
-@app.get("/get-folders")
+@app.get("/get-folders",
+         summary = "Lists all folders and with title and noteId")
 def list_folders(category: str):
 
     category_obj = get_category_obj(category)
@@ -707,50 +958,56 @@ def list_notes(
 
 @app.get("/tree")
 def list_tree_structure():
-    return build_tree()
+    return {
+        "title": "root",
+        "noteId": ROOT_FOLDER_ID,
+        "children": build_tree_node(
+            ROOT_FOLDER_ID
+        )
+    }
 
-@app.get("/read-note")
-def read_note(
-    category: str,
-    folder: str,
-    title: str
-): 
-        #
-    # Root
-    #   └── Projekts
-    #
-    category_obj = get_category_obj(category)
 
-    #
-    # Projekts
-    #   └── R7
-    #
+@app.post(
+    "/read-note",
+    summary="Read a note using its complete path"
+)
+def read_note(request: NotePath):
+    clean_path = [
+        part.strip()
+        for part in request.path
+        if part.strip()
+    ]
 
-    folder_obj = get_folder_objekt(category_obj["noteId"], folder)
-    #
-    # R7
-    #   └── Uppstartsmöte
-    #
-
-    note_obj = find_child_by_name(
-        folder_obj["noteId"],
-        title
-    )
-
-    if not note_obj:
+    if not clean_path:
         raise HTTPException(
-        status_code=404,
-        detail=f"Note '{title}' not found"
+            status_code=400,
+            detail="The path must contain a note title"
+        )
+
+    note = find_path(
+        clean_path
     )
 
-    content = get_note_content(note_obj["noteId"])
+    if not note:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": "Note path was not found",
+                "path": clean_path
+            }
+        )
 
     return {
         "action": "read",
-        "category": category_obj["title"],
-        "folder": folder_obj["title"],
-        "title": note_obj["title"],
-        "content": content
+        "path": [
+            item["title"]
+            for item in note["resolvedPath"]
+        ],
+        "title": note["title"],
+        "noteId": note["noteId"],
+        "content": get_note_content(
+            note["noteId"]
+        )
     }
 
 @app.get("/search")
@@ -758,123 +1015,31 @@ def search_notes(
     search_term: str,
     include_content: bool = True
 ):
-    """
-    Search category names, folder names, note titles,
-    and optionally note content.
+    clean_term = search_term.strip()
 
-    Examples:
-
-    /search?search_term=R7
-
-    /search?search_term=Jenny
-
-    /search?search_term=Sprint&include_content=false
-    """
-
-    clean_search_term = search_term.strip()
-
-    if not clean_search_term:
+    if not clean_term:
         raise HTTPException(
             status_code=400,
             detail="search_term cannot be empty"
         )
 
-    normalized_search = normalize_name(
-        clean_search_term
+    matches = search_tree_recursive(
+        parent_note_id=ROOT_FOLDER_ID,
+        search_term=clean_term,
+        include_content=include_content
     )
 
-    tree = build_tree()
-    matches = []
-
-    for category_title, category_data in tree.items():
-
-        folders = category_data["folders"]
-
-        for folder_title, folder_data in folders.items():
-
-            notes = folder_data["notes"]
-
-            for note in notes:
-                note_title = note["title"]
-                note_id = note["noteId"]
-
-                title_path_text = " ".join([
-                    category_title,
-                    folder_title,
-                    note_title
-                ])
-
-                path_matches = (
-                    normalized_search
-                    in normalize_name(title_path_text)
-                )
-
-                content = ""
-                plain_content = ""
-                content_matches = False
-
-                if include_content:
-                    content = get_note_content(note_id)
-                    plain_content = html_to_text(content)
-
-                    content_matches = (
-                        normalized_search
-                        in normalize_name(plain_content)
-                    )
-
-                if path_matches or content_matches:
-
-                    match_locations = []
-
-                    if (
-                        normalized_search
-                        in normalize_name(category_title)
-                    ):
-                        match_locations.append("category")
-
-                    if (
-                        normalized_search
-                        in normalize_name(folder_title)
-                    ):
-                        match_locations.append("folder")
-
-                    if (
-                        normalized_search
-                        in normalize_name(note_title)
-                    ):
-                        match_locations.append("title")
-
-                    if content_matches:
-                        match_locations.append("content")
-
-                    result = {
-                        "category": category_title,
-                        "categoryNoteId": category_data["noteId"],
-                        "folder": folder_title,
-                        "folderNoteId": folder_data["noteId"],
-                        "title": note_title,
-                        "noteId": note_id,
-                        "matchedIn": match_locations
-                    }
-
-                    if content_matches:
-                        result["snippet"] = create_search_snippet(
-                            plain_content,
-                            clean_search_term
-                        )
-
-                    matches.append(result)
-
     return {
-        "searchTerm": clean_search_term,
+        "searchTerm": clean_term,
         "includeContent": include_content,
         "count": len(matches),
         "matches": matches
     }
 
-@app.get("/statistics")
+@app.get("/statistics",
+         summary = "Get the current number of categories, folders and notes" )
 def statistics():
-    tree = build_tree()
+    tree = build_tree_node()
 
     catgories = 0
     folders = 0
@@ -896,67 +1061,59 @@ def statistics():
     
         
 
-@app.post("/write-note")
-def write_note(note: Note):
+@app.post(
+    "/write-note",
+    summary="Create or update a note using a complete path"
+)
+def write_note(request: WriteNoteRequest):
+    clean_path = [
+        part.strip()
+        for part in request.path
+        if part.strip()
+    ]
 
-    #
-    # Root
-    #   └── Projekts
-    #
+    if not clean_path:
+        raise HTTPException(
+            status_code=400,
+            detail="The path must contain a note title"
+        )
 
-    category = find_or_create_child_folder(
-        ROOT_FOLDER_ID,
-        note.category
+    # Final element is the note title.
+    note_title = clean_path[-1]
+
+    # Everything before it is the parent hierarchy.
+    parent_path = clean_path[:-1]
+
+    parent = find_or_create_path(
+        parent_path
     )
-
-    #
-    # Projekts
-    #   └── R7
-    #
-
-    folder = find_or_create_child_folder(
-        category["noteId"],
-        note.folder
-    )
-
-    #
-    # R7
-    #   └── Uppstartsmöte
-    #
 
     existing_note = find_child_by_name(
-        folder["noteId"],
-        note.title
+        parent["noteId"],
+        note_title
     )
+
+    resolved_full_path = [
+        item["title"]
+        for item in parent["resolvedPath"]
+    ] + [
+        existing_note["title"]
+        if existing_note
+        else note_title
+    ]
 
     if existing_note:
         return append_to_trilium_note(
-            note,
-            existing_note
+            request=request,
+            existing_note=existing_note,
+            resolved_path=resolved_full_path
         )
 
-    payload = {
-        "parentNoteId": folder["noteId"],
-        "title": note.title,
-        "type": "text",
-        "content": f"<p>{html.escape(note.content)}</p>"
-    }
-
-    response = request_trilium(
-        "POST",
-        "/etapi/create-note",
-        json=payload
+    return create_trilium_note(
+        request=request,
+        parent=parent,
+        note_title=note_title
     )
-
-    created = response.json()["note"]
-
-    return {
-        "action": "created",
-        "category": category["title"],
-        "folder": folder["title"],
-        "title": created["title"],
-        "noteId": created["noteId"]
-    }
 
 
 
