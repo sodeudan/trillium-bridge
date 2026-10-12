@@ -1,0 +1,35 @@
+services:
+
+  trilium:
+    image: triliumnext/trilium:latest
+    container_name: trilium
+    restart: unless-stopped
+
+    ports:
+      - "37840:8080"
+
+    volumes:
+      - trilium-data:/home/node/trilium-data
+
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: trilium-api
+    restart: unless-stopped
+
+    depends_on:
+      - trilium
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      TRILIUM_URL: http://trilium:8080
+      TRILIUM_TOKEN: ${TRILIUM_TOKEN}
+
+
+volumes:
+  trilium-data:

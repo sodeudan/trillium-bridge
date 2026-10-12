@@ -25,7 +25,10 @@ app = FastAPI(
 )
 
 
-TRILIUM_URL = "http://127.0.0.1:37840"
+TRILIUM_URL = os.getenv(
+    "TRILIUM_URL",
+    "http://127.0.0.1:37840"
+)
 TOKEN = os.getenv("TRILIUM_TOKEN")
 ROOT_FOLDER_ID = "root"
 
