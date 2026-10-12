@@ -859,6 +859,11 @@ def root():
         # "projectParentId": PROJECT_PARENT_ID
     }
 
+@app.get("/health")
+def health():
+    return {
+        "status": "ok"
+    }
 
 @app.get("/trilium-test",
          summary = "tests the Trilium connection, returns app info")
