@@ -1,0 +1,39 @@
+{
+    "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.30/MicrosoftTeams.schema.json",
+    "manifestVersion": "1.30",
+    "version": "1.0.0",
+    "id": "${{TEAMS_APP_ID}}",
+    "developer": {
+        "name": "${{DEVELOPER_NAME}}",
+        "websiteUrl": "${{DEVELOPER_WEBSITE_URL}}",
+        "privacyUrl": "${{DEVELOPER_PRIVACY_URL}}",
+        "termsOfUseUrl": "${{DEVELOPER_TERMS_URL}}"
+    },
+    "icons": {
+        "color": "color.png",
+        "outline": "outline.png"
+    },
+    "name": {
+        "short": "Meeting Prep${{APP_NAME_SUFFIX}}",
+        "full": "Microsoft 365 Meeting Preparation"
+    },
+    "description": {
+        "short": "Prepare for meetings with source-grounded Microsoft 365 briefings.",
+        "full": "On-demand meeting preparation using accessible meeting details, relevant emails, OneDrive and SharePoint files, Teams conversations, and prior meeting context. Summarizes agendas, decisions, outstanding actions, suggested questions, and preparation tasks with sources. Does not modify your calendar, send messages, or access Trilium."
+    },
+    "accentColor": "#FFFFFF",
+    "supportsChannelFeatures": "tier1",
+    "composeExtensions": [],
+    "permissions": [
+        "identity"
+    ],
+    "copilotAgents": {
+        "declarativeAgents": [            
+            {
+                "id": "declarativeAgent",
+                "file": "declarativeAgent.json"
+            }
+        ]
+    },
+    "validDomains": []
+}

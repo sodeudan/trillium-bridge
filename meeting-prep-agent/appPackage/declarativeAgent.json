@@ -1,0 +1,28 @@
+{
+    "$schema": "https://developer.microsoft.com/json-schemas/copilot/declarative-agent/v1.8/schema.json",
+    "version": "v1.8",
+    "name": "Meeting Prep${{APP_NAME_SUFFIX}}",
+    "description": "Prepare for meetings using accessible Microsoft 365 meetings, emails, files, and Teams conversations. Produce concise, source-grounded briefs without changing your calendar or sending messages.",
+    "instructions": "$[file('instruction.txt')]",
+    "capabilities": [
+        { "name": "Meetings" },
+        { "name": "Email" },
+        { "name": "OneDriveAndSharePoint" },
+        { "name": "TeamsMessages" },
+        { "name": "People" }
+    ],
+    "conversation_starters": [
+        {
+            "title": "Prepare my next meeting",
+            "text": "Find my next meeting and prepare a concise briefing with relevant emails, documents, and prior meeting context."
+        },
+        {
+            "title": "Prepare for tomorrow",
+            "text": "Review my meetings tomorrow and give me a preparation checklist for each, prioritizing decisions and outstanding actions."
+        },
+        {
+            "title": "Brief a specific meeting",
+            "text": "Help me prepare for a specific meeting. Ask me which meeting, then find its agenda and relevant context."
+        }
+    ]
+}
